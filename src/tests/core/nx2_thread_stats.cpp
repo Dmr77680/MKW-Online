@@ -1,0 +1,86 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include <catch2/catch_test_macros.hpp>
+
+#include "core/hle/kernel/nx2_address_wait_trace.h"
+#include "core/hle/kernel/nx2_thread_stats.h"
+
+namespace Stats = Kernel::Nx2ThreadStats;
+
+TEST_CASE("Guest thread stats count the gaps of a counter-polling loop", "[nx2][kernel]") {
+    constexpr u64 Spin = 52;
+    Stats::RunTally run{};
+    Stats::CountRead(run, 1000, Spin);
+    Stats::CountRead(run, 1005, Spin);
+    Stats::CountRead(run, 1040, Spin);
+    Stats::CountRead(run, 2000, Spin);
+    CHECK(run.reads == 4);
+    CHECK(run.poll_reads == 2);
+    CHECK(run.poll_ticks == 40);
+    CHECK(run.tight_poll_ticks == 5);
+}
+
+TEST_CASE("Guest thread stats count hints by type and the time between close ones",
+          "[nx2][kernel]") {
+    constexpr u64 Spin = 52;
+    Stats::RunTally run{};
+    Stats::CountHint(run, 4, 500, Spin);
+    Stats::CountHint(run, 4, 510, Spin);
+    Stats::CountHint(run, 1, 900, Spin);
+    CHECK(run.hints[4] == 2);
+    CHECK(run.hints[1] == 1);
+    CHECK(run.hint_ticks == 10);
+}
+
+TEST_CASE("Guest thread stats split read-backs from other cached memory calls", "[nx2][kernel]") {
+    Stats::RunTally run{};
+    Stats::CountMemory(run, 7, true, true, false);
+    Stats::CountMemory(run, 300, false, false, true);
+    Stats::CountMemory(run, 5, false, true, false);
+    CHECK(run.memory_calls == 3);
+    CHECK(run.memory_ticks == 312);
+    CHECK(run.memory_reads == 2);
+    CHECK(run.memory_read_ticks == 305);
+    CHECK(run.memory_read_hits == 1);
+    CHECK(run.memory_write_hits == 1);
+    CHECK(run.read_backs == 1);
+    CHECK(run.read_back_ticks == 300);
+}
+
+TEST_CASE("Guest thread stats name the wait of each blocking SVC", "[nx2][kernel]") {
+    static_assert(Stats::WaitOf(0x21) == Stats::Wait::Ipc);
+    static_assert(Stats::WaitOf(0x18) == Stats::Wait::SyncObjects);
+    static_assert(Stats::WaitOf(0x34) == Stats::Wait::Arbiter);
+    static_assert(Stats::WaitOf(0x1C) == Stats::Wait::CondVar);
+    static_assert(Stats::WaitOf(0x1A) == Stats::Wait::Lock);
+    static_assert(Stats::WaitOf(0x0B) == Stats::Wait::Sleep);
+    CHECK(Stats::WaitOf(0x43) == Stats::Wait::Other);
+}
+
+TEST_CASE("Address wait trace reports the threads with the most wait time and their wakers",
+          "[nx2][kernel]") {
+    namespace Trace = Kernel::Nx2AddressWaitTrace;
+    Trace::Table table;
+    table.Add(88, 0x1000, 3'000'000, 95);
+    table.Add(88, 0x1000, 1'000'000, Trace::Timeout);
+    table.Add(88, 0x2000, 500'000, 90);
+    table.Add(95, 0x1000, 2'000'000, 88);
+    for (u64 id = 100; id < 104; ++id) {
+        table.Add(id, 0x3000, 9'000'000, Trace::Timeout);
+    }
+    const auto name = [](u64 id) { return "t" + std::to_string(id); };
+    const auto lines = table.Report(1.0, name, {88, 77});
+    REQUIRE(lines.size() == 17);
+    // Four sleepers rank first; t88 and t77 (no waits) are listed because they are forced.
+    CHECK(lines[1] == "  t100 waits 9.00 ms/s on addresses:");
+    CHECK(lines[9] == "  t88 waits 4.50 ms/s on addresses:");
+    CHECK(lines[10] ==
+          "    0x1000: 2 waits/s, 4.00 ms/s; woken by t95 1 (3.00 ms/s), timeout 1 (1.00 ms/s)");
+    CHECK(lines[11] == "    0x2000: 1 waits/s, 0.50 ms/s; woken by t90 1 (0.50 ms/s)");
+    CHECK(lines[12] == "  t77 waits 0.00 ms/s on addresses:");
+    CHECK(lines[13] == "  All threads:");
+    CHECK(lines[14] == "    0x3000: 4 waits/s, 36.00 ms/s; woken by timeout 4 (36.00 ms/s)");
+    CHECK(lines[15] == "    0x1000: 3 waits/s, 6.00 ms/s; woken by t95 1 (3.00 ms/s), t88 1 "
+                       "(2.00 ms/s), timeout 1 (1.00 ms/s)");
+}
