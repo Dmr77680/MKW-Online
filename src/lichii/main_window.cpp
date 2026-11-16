@@ -11,6 +11,7 @@
 #include <QSysInfo>
 #include <boost/algorithm/string/split.hpp>
 #include "common/fs/path_util.h"
+#include "common/game_presets.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "common/shutdown_progress.h"
@@ -200,6 +201,9 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include <cstdlib>
 #include <mutex>
 #include <thread>
+#include <QCoreApplication>
+#include <QPointer>
+#include "common/httplib.h"
 #include <boost/container/flat_set.hpp>
 
 // Platform stuff //
@@ -973,6 +977,42 @@ void MainWindow::WebBrowserRequestExit() {
 #endif
 }
 
+// Online players counter: asks our own server (GET /status -> {"online": N, "rooms": R}) from a
+// background thread, then updates the label on the GUI thread. Shows "Online: ?" if unreachable.
+void MainWindow::UpdateOnlinePlayers() {
+    QPointer<QLabel> label = online_players_label;
+    std::thread([label] {
+        int online = -1;
+        try {
+            httplib::Client cli("2.29.165.22", 8088);
+            cli.set_connection_timeout(3);
+            cli.set_read_timeout(3);
+            if (auto res = cli.Get("/status"); res && res->status == 200) {
+                const std::string& body = res->body;
+                const auto key = body.find("\"online\"");
+                if (key != std::string::npos) {
+                    const auto colon = body.find(':', key);
+                    if (colon != std::string::npos) {
+                        online = std::atoi(body.c_str() + colon + 1);
+                    }
+                }
+            }
+        } catch (...) {
+            online = -1;
+        }
+        const QString text = online >= 0 ? QStringLiteral("Online: %1").arg(online)
+                                         : QStringLiteral("Online: ?");
+        QMetaObject::invokeMethod(
+            qApp,
+            [label, text] {
+                if (label) {
+                    label->setText(text);
+                }
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
 void MainWindow::InitializeWidgets() {
     render_window = new GRenderWindow(this, input_subsystem);
     render_window->hide();
@@ -1035,6 +1075,15 @@ void MainWindow::InitializeWidgets() {
         label->setContentsMargins(4, 0, 4, 0);
         statusBar()->addPermanentWidget(label);
     }
+
+    // Online players counter (own server, GET /status)
+    online_players_label = new QLabel(QStringLiteral("Online: ?"));
+    online_players_label->setToolTip(tr("Players currently connected to the online server."));
+    online_players_label->setContentsMargins(4, 0, 4, 0);
+    statusBar()->addPermanentWidget(online_players_label);
+    connect(&online_players_timer, &QTimer::timeout, this, [this] { UpdateOnlinePlayers(); });
+    online_players_timer.start(30000);
+    QTimer::singleShot(1000, this, [this] { UpdateOnlinePlayers(); });
 
     firmware_label = new QLabel();
     firmware_label->setObjectName(QStringLiteral("FirmwareLabel"));
@@ -2233,7 +2282,29 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         const auto config_file_name = title_id == 0
                                           ? Common::FS::PathToUTF8String(file_path.filename())
                                           : fmt::format("{:016X}", title_id);
+        // First launch of Mario Kart World: start from the settings the online beta is tuned on.
+        // Written once into the game's own configuration, so they can still be changed afterwards.
+        std::error_code mkw_ec;
+        const bool first_mkw_boot =
+            title_id == Settings::MarioKartWorldProgramId &&
+            !std::filesystem::exists(Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) /
+                                         "custom" / fmt::format("{}.ini", config_file_name),
+                                     mkw_ec);
         QtConfig per_game_config(config_file_name, Config::ConfigType::PerGameConfig);
+        if (first_mkw_boot) {
+            const auto set = [](auto& setting, auto value) {
+                setting.SetGlobal(false);
+                setting.SetValue(value);
+            };
+            set(Settings::values.mkw_30fps, true);
+            set(Settings::values.build_all_cached_shaders, true);
+            set(Settings::values.native_async_draws, Settings::NativeAsyncDraws::Skip);
+            set(Settings::values.use_asynchronous_shaders, true);
+            set(Settings::values.async_presentation, true);
+            set(Settings::values.gpu_accuracy, Settings::GpuAccuracy::Low);
+            per_game_config.SaveAllValues();
+            LOG_INFO(Config, "Mario Kart World: wrote the starting per-game settings");
+        }
         QtCommon::system->HIDCore().ReloadInputDevices();
         QtCommon::system->ApplySettings();
     }
