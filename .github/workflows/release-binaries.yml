@@ -366,7 +366,7 @@ jobs:
         run: |
           if command -v ccache > /dev/null; then ccache --zero-stats; else sccache --zero-stats; fi
           targets="lichii lichii-cmd"
-          cmake --build build/release --target $targets --parallel
+          cmake --build build/release --target $targets --parallel -- -k 0
           if command -v ccache > /dev/null; then ccache --show-stats; else sccache --show-stats; fi
 
       - name: Stop sccache on Windows

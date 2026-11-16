@@ -12,6 +12,7 @@
 #include <boost/algorithm/string/split.hpp>
 #include "common/fs/path_util.h"
 #include "common/game_presets.h"
+#include "online_status.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "common/shutdown_progress.h"
@@ -203,7 +204,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include <thread>
 #include <QCoreApplication>
 #include <QPointer>
-#include "common/httplib.h"
 #include <boost/container/flat_set.hpp>
 
 // Platform stuff //
@@ -982,24 +982,7 @@ void MainWindow::WebBrowserRequestExit() {
 void MainWindow::UpdateOnlinePlayers() {
     QPointer<QLabel> label = online_players_label;
     std::thread([label] {
-        int online = -1;
-        try {
-            httplib::Client cli("2.29.165.22", 8088);
-            cli.set_connection_timeout(3);
-            cli.set_read_timeout(3);
-            if (auto res = cli.Get("/status"); res && res->status == 200) {
-                const std::string& body = res->body;
-                const auto key = body.find("\"online\"");
-                if (key != std::string::npos) {
-                    const auto colon = body.find(':', key);
-                    if (colon != std::string::npos) {
-                        online = std::atoi(body.c_str() + colon + 1);
-                    }
-                }
-            }
-        } catch (...) {
-            online = -1;
-        }
+        const int online = FetchOnlinePlayerCount();
         const QString text = online >= 0 ? QStringLiteral("Online: %1").arg(online)
                                          : QStringLiteral("Online: ?");
         QMetaObject::invokeMethod(
