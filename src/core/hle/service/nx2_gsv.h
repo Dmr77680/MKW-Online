@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <bit>
 #include <thread>
 #include <chrono>
@@ -1842,7 +1843,10 @@ public:
             {21, &INx2CameraSession::GetCameraEvent, "GetCameraEvent"},
             {29, &INx2CameraSession::CheckImagePreference, "CheckImagePreference"},
         };
-        RegisterHandlers(functions);
+        // EDEN_NX2_ONLINE_PLAIN_CAMERA=1: no command registered, so every one takes the nx2 auto
+        // stub (success, zeroed) as in the Eglantine build.
+        static const bool plain = std::getenv("EDEN_NX2_ONLINE_PLAIN_CAMERA") != nullptr;
+        RegisterHandlers(functions, plain ? 0 : std::size(functions));
         m_event = m_context.CreateEvent("nx2:camera:Event");
     }
 

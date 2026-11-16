@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <cstdlib>
+#include <iterator>
 #include <queue>
 #include "common/logging.h"
 #include "common/uuid.h"
@@ -574,7 +576,10 @@ public:
             {3, &IChatSession::AttachToChangedEvent, "AttachToLocalCameraImageProcessingModeChangedEvent"},
             {4, &IChatSession::AttachToChangedEvent, "AttachToLocalCameraZoomMagnificationChangedEvent"},
         };
-        RegisterHandlers(functions);
+        // EDEN_NX2_ONLINE_PLAIN_CHAT=1: only command 1, as the Eglantine build; the rest take the
+        // nx2 auto stub (success, zeroed), to tell if the online lobby depends on these answers.
+        static const bool plain = std::getenv("EDEN_NX2_ONLINE_PLAIN_CHAT") != nullptr;
+        RegisterHandlers(functions, plain ? 1 : std::size(functions));
         event = service_context.CreateEvent("IChatSession:Event");
         static constexpr std::array<const char*, 3> changed_event_names{
             "IChatSession:RoomInfoChanged",
@@ -629,7 +634,9 @@ public:
             {4, &IChatService::OpenStubObject, "OpenUserSelectiveTalkShimScopedObject"},
             {11, &IChatService::GetRoomInfo, "GetRoomInfo"},
         };
-        RegisterHandlers(functions);
+        // EDEN_NX2_ONLINE_PLAIN_CHAT=1: only command 0, as the Eglantine build.
+        static const bool plain = std::getenv("EDEN_NX2_ONLINE_PLAIN_CHAT") != nullptr;
+        RegisterHandlers(functions, plain ? 1 : std::size(functions));
     }
 
 private:

@@ -171,6 +171,13 @@ void CoreTiming::WaitForEvent(s64 next_time, std::optional<s64> one_shot_time) {
     if (next_time <= start) {
         return;
     }
+    // EDEN_NX2_ONLINE_OLD_WAIT=1: the plain wait of the Eglantine build, without the spin and the
+    // one-shot margin, to tell if the timer's wake-up changes the online lobby.
+    static const bool old_wait = std::getenv("EDEN_NX2_ONLINE_OLD_WAIT") != nullptr;
+    if (old_wait) {
+        event.WaitFor(std::chrono::nanoseconds{next_time - start});
+        return;
+    }
     const s64 margin = t_host_wait_margin.Get(start);
     const bool precise = one_shot_time && *one_shot_time - margin <= start;
     const s64 wake = one_shot_time ? (std::min)(next_time, *one_shot_time - margin) : next_time;
